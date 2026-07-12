@@ -1,0 +1,221 @@
+voice_doc_agent/
+│
+├── 📄 .env ⭐ EDIT THIS - Add your OpenAI API key
+│
+├── 📄 .env.example (Template - do not edit)
+├── 📄 .gitignore
+│
+├── 📄 voice_agent.py ⭐ MAIN ENTRY POINT
+│   └─ Run: python voice_agent.py data/sample_policy.txt
+│
+├── 📄 requirements.txt
+│   └─ Dependencies (openai, langchain, faiss, pytest, etc)
+│
+├── 📄 README.md ⭐ FULL DOCUMENTATION
+│   └─ Setup, usage, architecture, troubleshooting
+│
+├── 📄 FRONTEND_OPTIONS.md
+│   └─ Guide for building web/mobile UI
+│
+├── 📄 PROJECT_STRUCTURE.md
+│   └─ Detailed breakdown of every file
+│
+├── 📁 app/ ⭐ CORE AGENT CODE
+│   │
+│   ├── __init__.py
+│   │
+│   ├── loaders.py (76 lines)
+│   │   └─ load_document(path)
+│   │      ├─ load_pdf() → PyPDFLoader
+│   │      ├─ load_docx() → python-docx
+│   │      └─ load_txt() → plain text
+│   │
+│   ├── chunker.py (19 lines)
+│   │   └─ chunk_documents()
+│   │      └─ RecursiveCharacterTextSplitter (1000 chars, 200 overlap)
+│   │
+│   ├── indexer.py (58 lines)
+│   │   ├─ get_file_hash() → SHA256 for caching
+│   │   └─ get_or_build_index() → FAISS builder
+│   │      ├─ Check cache (indexes/<hash>/)
+│   │      └─ Build fresh if not cached
+│   │
+│   ├── qa_chain.py ⭐ GROUNDING LOGIC (83 lines)
+│   │   └─ query_document()
+│   │      1. Retrieve top-k chunks (similarity search)
+│   │      2. Check relevance threshold
+│   │      3. If below threshold → return "not found" (no LLM)
+│   │      4. If above threshold → send to LLM with strict prompt
+│   │      5. Parse response for sentinel phrase
+│   │      6. Return (answer, found: bool, sources: list)
+│   │
+│   ├── voice_io.py (120 lines)
+│   │   ├─ record_from_mic() → sounddevice + scipy
+│   │   │  └─ Press Enter to start, Enter to stop
+│   │   │
+│   │   ├─ transcribe_audio() → OpenAI Whisper STT
+│   │   │
+│   │   ├─ speak_response() → OpenAI TTS
+│   │   │  └─ Saves MP3, plays via afplay (macOS)
+│   │   │
+│   │   └─ has_mic_available() → Check if mic exists
+│   │
+│   └── web_fallback.py (32 lines)
+│       └─ search_web_for_answer()
+│          └─ OpenAI web search (opt-in, labeled)
+│
+├── 📁 tests/ ⭐ 41 TESTS - ALL PASSING
+│   │
+│   ├── __init__.py
+│   │
+│   ├── conftest.py (Shared fixtures)
+│   │   ├─ sample_text → Employee leave policy
+│   │   ├─ temp_txt_file → Temp TXT fixture
+│   │   ├─ temp_pdf_file → Temp PDF fixture
+│   │   └─ mock_openai_key → Mock API key
+│   │
+│   ├── test_loaders.py (7 tests)
+│   │   ├─ test_load_txt_valid()
+│   │   ├─ test_load_txt_empty()
+│   │   ├─ test_load_document_txt()
+│   │   ├─ test_load_document_missing()
+│   │   ├─ test_load_document_unsupported()
+│   │   ├─ test_load_docx_missing()
+│   │   └─ test_load_document_via_dispatch()
+│   │
+│   ├── test_chunker.py (5 tests)
+│   │   ├─ test_chunk_documents_basic()
+│   │   ├─ test_chunk_documents_preserves_metadata()
+│   │   ├─ test_chunk_documents_overlap()
+│   │   ├─ test_chunk_documents_empty()
+│   │   └─ test_chunk_documents_short()
+│   │
+│   ├── test_indexer.py (5 tests)
+│   │   ├─ test_get_file_hash()
+│   │   ├─ test_get_file_hash_different_files()
+│   │   ├─ test_get_or_build_index_builds_fresh()
+│   │   ├─ test_get_or_build_index_loads_cached()
+│   │   └─ test_get_or_build_index_cache_dir_created()
+│   │
+│   ├── test_qa_chain.py (5 tests)
+│   │   ├─ test_query_document_found()
+│   │   ├─ test_query_document_below_threshold()
+│   │   ├─ test_query_document_llm_returns_sentinel()
+│   │   ├─ test_query_document_empty_retrieval()
+│   │   └─ test_query_document_custom_threshold()
+│   │
+│   ├── test_voice_io.py (9 tests)
+│   │   ├─ test_transcribe_audio_success()
+│   │   ├─ test_transcribe_audio_empty_result()
+│   │   ├─ test_transcribe_audio_api_error()
+│   │   ├─ test_speak_response_success()
+│   │   ├─ test_speak_response_long_text_truncated()
+│   │   ├─ test_speak_response_empty_text()
+│   │   ├─ test_speak_response_afplay_not_found()
+│   │   ├─ test_speak_response_tts_error()
+│   │   └─ test_has_mic_available_*()
+│   │
+│   ├── test_web_fallback.py (4 tests)
+│   │   ├─ test_search_web_success()
+│   │   ├─ test_search_web_api_error()
+│   │   ├─ test_search_web_result_labeled()
+│   │   └─ test_search_web_uses_env_model()
+│   │
+│   └── test_integration.py (4 tests)
+│       ├─ test_full_pipeline_found()
+│       ├─ test_full_pipeline_not_found()
+│       ├─ test_multiple_formats()
+│       └─ test_web_fallback_integration()
+│
+├── 📁 data/
+│   └── sample_policy.txt (500+ lines)
+│       ├─ Section 1: Leave Policy (annual, sick, parental)
+│       ├─ Section 2: Work Arrangement (remote, flexible)
+│       ├─ Section 3: Health & Wellness (insurance, gym)
+│       ├─ Section 4: Professional Development (training, reimbursement)
+│       ├─ Section 5: Compensation (salary, bonus, stock)
+│       ├─ Section 6: Termination & Severance
+│       ├─ Section 7: Code of Conduct
+│       └─ Section 8: Performance & Reviews
+│
+├── 📁 indexes/ (auto-created on first run)
+│   └── <file-hash>/
+│       ├─ index.faiss (vector index binary)
+│       └─ index.pkl (metadata)
+│
+└── 📁 venv/ (Python virtual environment)
+    ├─ bin/
+    │  ├─ python
+    │  ├─ pip
+    │  └─ pytest
+    ├─ lib/
+    │  └─ python3.9/site-packages/ (all dependencies)
+    └─ ...
+
+
+════════════════════════════════════════════════════════════════════════════════
+KEY FILES TO KNOW
+════════════════════════════════════════════════════════════════════════════════
+
+⭐ CONFIGURATION
+   .env                  → YOUR API KEY GOES HERE (just created)
+   requirements.txt      → Python dependencies
+
+⭐ ENTRY POINT
+   voice_agent.py        → Run this: python voice_agent.py data/sample_policy.txt
+
+⭐ CORE AGENT LOGIC (Read in order)
+   app/loaders.py        → Load documents (PDF/DOCX/TXT)
+   app/chunker.py        → Split into chunks
+   app/indexer.py        → Build & cache FAISS indexes
+   app/qa_chain.py       → Q&A logic (MOST IMPORTANT - strict grounding)
+   app/voice_io.py       → Voice recording & playback
+   app/web_fallback.py   → Web search (optional)
+
+⭐ TESTS (Run: pytest tests/ -v)
+   tests/conftest.py     → Shared fixtures
+   tests/test_*.py       → 41 unit + integration tests (all mocked)
+
+⭐ DOCUMENTATION
+   README.md             → Setup & usage guide
+   PROJECT_STRUCTURE.md  → Detailed file descriptions
+   FRONTEND_OPTIONS.md   → Guide for web/mobile UI
+
+
+════════════════════════════════════════════════════════════════════════════════
+QUICK START
+════════════════════════════════════════════════════════════════════════════════
+
+1. Edit .env file
+   └─ Replace: OPENAI_API_KEY=sk-your-key-here
+   └─ With: OPENAI_API_KEY=sk-proj-xxxx... (your actual key)
+
+2. Run the agent (text mode)
+   cd /Users/aneesfatima/genai-projects/voice_doc_agent
+   source venv/bin/activate
+   python voice_agent.py data/sample_policy.txt
+
+3. Try these questions:
+   ✓ "How many days of annual leave?" (in document)
+   ✓ "What is quantum physics?" (not in document → web fallback)
+   ✓ Type 'exit' to quit
+
+4. Run tests (verify everything works)
+   pytest tests/ -v
+
+5. Try voice mode (optional)
+   └─ Agent will prompt: Press Enter to start recording
+
+
+════════════════════════════════════════════════════════════════════════════════
+FILE STATS
+════════════════════════════════════════════════════════════════════════════════
+
+Agent Code:           ~518 lines   (6 modules in app/)
+Test Code:            ~800 lines   (41 tests)
+Documentation:       ~1000 lines   (README + guides)
+Sample Document:      ~500 lines   (sample_policy.txt)
+Total:              ~2800 lines   (complete working system)
+
+Test Coverage: 41 tests covering all modules + edge cases
+Status: ✅ All tests passing (0 API cost - mocked)

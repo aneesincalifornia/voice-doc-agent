@@ -76,26 +76,32 @@ def main():
         try:
             # Get question
             if voice_enabled:
-                cmd = input("\n[Enter to speak, or type a question]: ").strip()
-            else:
-                cmd = input("\n[Type a question]: ").strip()
+                cmd = input("\n[Press Enter to speak, or type a question, or 'exit']: ").strip()
 
-            if cmd.lower() == "exit":
-                print("Goodbye!")
-                break
+                if cmd.lower() == "exit":
+                    print("Goodbye!")
+                    break
 
-            if not cmd:
-                # Empty input in text mode, or try to record
-                if voice_enabled:
-                    print("Recording...")
+                if not cmd:
+                    # Empty input → record from mic
+                    print("🎤 Recording...")
                     audio_bytes = record_from_mic()
-                    print("Transcribing...")
+                    print("📝 Transcribing...")
                     question = transcribe_audio(audio_bytes)
-                    print(f"You asked: {question}")
+                    print(f"📢 You asked: {question}")
                 else:
+                    question = cmd
+            else:
+                cmd = input("\n[Type a question, or 'exit']: ").strip()
+
+                if cmd.lower() == "exit":
+                    print("Goodbye!")
+                    break
+
+                if not cmd:
                     print("Please type a question or 'exit'.")
                     continue
-            else:
+
                 question = cmd
 
             if not question.strip():

@@ -3,12 +3,85 @@ from io import BytesIO
 from unittest.mock import MagicMock, patch, call, PropertyMock
 import scipy.io.wavfile as wavfile
 import numpy as np
+import sounddevice as sd
 
 from app.voice_io import (
     transcribe_audio,
     speak_response,
     has_mic_available,
+    record_from_mic,
 )
+
+@patch("app.voice_io.sd.query_devices")
+@patch("app.voice_io.sd.default")
+def test_record_from_mic_queries_device(mock_default, mock_query_devices):
+    """Test that record_from_mic queries the device to get its native sample rate."""
+    mock_device = {
+        "name": "Test Microphone",
+        "max_input_channels": 1,
+        "default_samplerate": 48000
+    }
+    mock_query_devices.return_value = mock_device
+    mock_default.device = (0, 1)
+
+    with patch("app.voice_io.sd.InputStream") as mock_stream:
+        mock_stream_instance = MagicMock()
+        mock_stream.return_value = mock_stream_instance
+        mock_stream_instance.__enter__.return_value = mock_stream_instance
+
+        # Inject minimal audio data to avoid the "No audio captured" error
+        with patch("app.voice_io.input"):
+            try:
+                record_from_mic()
+            except (ValueError, IndexError):
+                # Expected to fail during concatenate since we didn't actually capture data
+                pass
+
+        # Verify query_devices was called to get device info
+        mock_query_devices.assert_called()
+        # Verify InputStream was called with sample rate from device
+        call_kwargs = mock_stream.call_args[1]
+        assert call_kwargs["samplerate"] == 48000
+
+@patch("app.voice_io.sd.InputStream")
+@patch("app.voice_io.sd.query_devices")
+@patch("app.voice_io.sd.default")
+def test_record_from_mic_port_audio_error(mock_default, mock_query_devices, mock_stream):
+    """Test that PortAudioError produces an actionable message."""
+    mock_device = {
+        "name": "Broken Mic",
+        "max_input_channels": 1,
+        "default_samplerate": 44100
+    }
+    mock_query_devices.return_value = mock_device
+    mock_default.device = (0, 1)
+
+    mock_stream.side_effect = sd.PortAudioError("Some PortAudio error")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        record_from_mic()
+
+    error_msg = str(exc_info.value)
+    assert "Microphone permission not granted" in error_msg
+    assert "check_mic.py" in error_msg
+
+@patch("app.voice_io.sd.query_devices")
+@patch("app.voice_io.sd.default")
+def test_record_from_mic_no_input_channels(mock_default, mock_query_devices):
+    """Test that device with zero input channels is rejected."""
+    mock_device = {
+        "name": "Speakers",
+        "max_input_channels": 0,
+        "default_samplerate": 44100
+    }
+    mock_query_devices.return_value = mock_device
+    mock_default.device = (0, 1)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        record_from_mic()
+
+    error_msg = str(exc_info.value)
+    assert "no input channels" in error_msg
 
 def test_transcribe_audio_success():
     """Test successful transcription."""
@@ -142,30 +215,49 @@ def test_speak_response_tts_error():
 
         assert True
 
-def test_has_mic_available_true():
+@patch("app.voice_io.sd.query_devices")
+@patch("app.voice_io.sd.default")
+def test_has_mic_available_true(mock_default, mock_query):
     """Test detecting when mic is available."""
-    with patch("app.voice_io.sd.default") as mock_default:
-        mock_default.device = 0
+    # Mock a device with input channels
+    mock_device = {
+        "name": "Built-in Microphone",
+        "max_input_channels": 1,
+        "default_samplerate": 44100
+    }
+    mock_query.side_effect = [
+        [mock_device],  # First call: query all devices
+        mock_device     # Second call: query default device
+    ]
+    mock_default.device = (0, 1)
 
-        result = has_mic_available()
+    result = has_mic_available()
+    assert result is True
 
-        assert result is True
+@patch("app.voice_io.sd.query_devices")
+@patch("app.voice_io.sd.default")
+def test_has_mic_available_false_no_input_channels(mock_default, mock_query):
+    """Test detecting when device has zero input channels."""
+    # Mock a device with NO input channels (output-only)
+    mock_device = {
+        "name": "Speakers",
+        "max_input_channels": 0,
+        "default_samplerate": 44100
+    }
+    mock_query.side_effect = [
+        [mock_device],  # First call: query all devices
+        mock_device     # Second call: query default device
+    ]
+    mock_default.device = (0, 1)
 
-def test_has_mic_available_false():
-    """Test detecting when mic is not available."""
-    with patch("app.voice_io.sd.default") as mock_default:
-        mock_default.device = None
+    result = has_mic_available()
+    assert result is False
 
-        result = has_mic_available()
-
-        assert result is False
-
-def test_has_mic_available_exception():
+@patch("app.voice_io.sd.query_devices")
+def test_has_mic_available_exception(mock_query):
     """Test mic check with exception."""
-    with patch("app.voice_io.sd.default") as mock_default:
-        # Make accessing .device raise an exception
-        type(mock_default).device = PropertyMock(side_effect=Exception("Device error"))
+    mock_query.side_effect = Exception("Device error")
 
-        result = has_mic_available()
+    result = has_mic_available()
 
-        assert result is False
+    assert result is False

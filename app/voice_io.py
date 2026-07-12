@@ -12,47 +12,78 @@ def get_client():
     """Lazily initialize OpenAI client to allow test mocking."""
     return OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def record_from_mic(duration: int = 30, sample_rate: int = 16000) -> bytes:
+def record_from_mic(duration: int = 30) -> bytes:
     """
     Record audio from the microphone.
 
-    Press Enter to start, Enter again to stop (or max duration_seconds).
+    Automatically uses the current default input device's native sample rate
+    to avoid PortAudio format mismatch errors.
+
+    Press Enter to stop recording (or max duration_seconds).
     Returns WAV bytes.
     """
-    print("Press Enter to start recording (max 30 seconds)...")
-    input()
+    import numpy as np
 
-    print("Recording... press Enter to stop.")
+    # Freshly query the current default input device at record time
+    # (not cached) to handle device changes (e.g., headphones plugged/unplugged)
+    try:
+        default_input_idx = sd.default.device[0]
+        device_info = sd.query_devices(default_input_idx)
+
+        if device_info["max_input_channels"] == 0:
+            raise RuntimeError(
+                f"Default input device '{device_info['name']}' has no input channels. "
+                "Please check System Settings → Sound or select a different microphone."
+            )
+
+        # Use the device's native sample rate to prevent CoreAudio resampling issues
+        sample_rate = int(device_info["default_samplerate"])
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to query microphone device: {e}\n"
+            "Check: (1) System Settings → Privacy & Security → Microphone (allow this app)\n"
+            "       (2) Run 'python check_mic.py' for detailed device diagnostics"
+        )
+
+    print(f"Recording... (using {sample_rate} Hz). Press Enter to stop.")
 
     audio_data = []
-    recording = True
 
     def audio_callback(indata, frames, time, status):
         if status:
-            print(f"Audio error: {status}", file=sys.stderr)
+            print(f"Audio warning: {status}", file=sys.stderr)
         audio_data.append(indata.copy())
 
     try:
-        # Record in a thread with a callback
+        # Record in a stream with callback
         stream = sd.InputStream(
             samplerate=sample_rate,
             channels=1,
             callback=audio_callback,
-            blocksize=1024
+            blocksize=1024,
+            device=default_input_idx
         )
 
         with stream:
-            # Wait for user to press Enter
+            # Wait for user to press Enter to stop
             input()
-            recording = False
+    except sd.PortAudioError as e:
+        raise RuntimeError(
+            f"Microphone recording failed: {e}\n"
+            "This usually means:\n"
+            "  (1) Microphone permission not granted\n"
+            "      → System Settings → Privacy & Security → Microphone\n"
+            "      → Add Terminal/iTerm/VS Code to allowed apps\n"
+            "  (2) Microphone device unavailable or disconnected\n"
+            "      → Run 'python check_mic.py' to diagnose"
+        )
     except Exception as e:
         raise RuntimeError(f"Microphone recording failed: {e}")
 
     if not audio_data:
-        raise ValueError("No audio data captured")
+        raise ValueError("No audio data captured. Please speak into your microphone.")
 
     # Concatenate all audio frames
-    import numpy as np
     audio_array = np.concatenate(audio_data, axis=0)
     audio_array = (audio_array * 32767).astype('int16')
 
@@ -109,9 +140,22 @@ def speak_response(text: str, voice: str = "alloy") -> None:
         print(f"⚠ Text-to-speech failed: {e}")
 
 def has_mic_available() -> bool:
-    """Check if a microphone is available."""
+    """Check if a working input device is available (with input channels)."""
     try:
-        device_info = sd.default.device
-        return device_info is not None
+        # Query all input devices
+        devices = sd.query_devices()
+        input_devices = [
+            d for d in devices
+            if isinstance(d, dict) and d.get("max_input_channels", 0) > 0
+        ]
+
+        if not input_devices:
+            return False
+
+        # Check if the default input device has input channels
+        default_input_idx = sd.default.device[0]
+        default_device = sd.query_devices(default_input_idx)
+
+        return default_device.get("max_input_channels", 0) > 0
     except Exception:
         return False
