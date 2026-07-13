@@ -12,36 +12,57 @@ from app.voice_io import (
     record_from_mic,
 )
 
+@patch("app.voice_io.sd._initialize")
+@patch("app.voice_io.sd._terminate")
 @patch("app.voice_io.sd.query_devices")
 @patch("app.voice_io.sd.default")
-def test_record_from_mic_queries_device(mock_default, mock_query_devices):
-    """Test that record_from_mic queries the device to get its native sample rate."""
+def test_record_from_mic_retries_on_portaudio_error(mock_default, mock_query_devices, mock_terminate, mock_initialize):
+    """Test that record_from_mic retries on PortAudioError and calls terminate/initialize."""
     mock_device = {
         "name": "Test Microphone",
         "max_input_channels": 1,
-        "default_samplerate": 48000
+        "default_samplerate": 44100
     }
     mock_query_devices.return_value = mock_device
     mock_default.device = (0, 1)
 
     with patch("app.voice_io.sd.InputStream") as mock_stream:
-        mock_stream_instance = MagicMock()
-        mock_stream.return_value = mock_stream_instance
-        mock_stream_instance.__enter__.return_value = mock_stream_instance
+        # All attempts fail — verify retry mechanism is triggered
+        mock_stream.side_effect = sd.PortAudioError("Persistent error")
 
-        # Inject minimal audio data to avoid the "No audio captured" error
-        with patch("app.voice_io.input"):
-            try:
-                record_from_mic()
-            except (ValueError, IndexError):
-                # Expected to fail during concatenate since we didn't actually capture data
-                pass
+        with pytest.raises(RuntimeError) as exc_info:
+            record_from_mic(max_retries=2)
 
-        # Verify query_devices was called to get device info
-        mock_query_devices.assert_called()
-        # Verify InputStream was called with sample rate from device
-        call_kwargs = mock_stream.call_args[1]
-        assert call_kwargs["samplerate"] == 48000
+        # Verify PortAudio was re-initialized once (after first attempt)
+        assert mock_terminate.call_count == 1
+        assert mock_initialize.call_count == 1
+
+        error_msg = str(exc_info.value)
+        assert "after 2 attempts" in error_msg
+
+@patch("app.voice_io.sd.InputStream")
+@patch("app.voice_io.sd.query_devices")
+@patch("app.voice_io.sd.default")
+def test_record_from_mic_raises_after_retries_exhausted(mock_default, mock_query_devices, mock_stream):
+    """Test that record_from_mic raises RuntimeError after all retries fail."""
+    mock_device = {
+        "name": "Test Microphone",
+        "max_input_channels": 1,
+        "default_samplerate": 44100
+    }
+    mock_query_devices.return_value = mock_device
+    mock_default.device = (0, 1)
+
+    # All attempts fail
+    mock_stream.side_effect = sd.PortAudioError("Persistent error")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        record_from_mic(max_retries=3)
+
+    error_msg = str(exc_info.value)
+    assert "after 3 attempts" in error_msg
+    assert "Microphone permission not granted" in error_msg
+    assert "check_mic.py" in error_msg
 
 @patch("app.voice_io.sd.InputStream")
 @patch("app.voice_io.sd.query_devices")

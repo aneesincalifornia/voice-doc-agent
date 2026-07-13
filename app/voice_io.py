@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import tempfile
 import subprocess
 from io import BytesIO
@@ -12,86 +13,115 @@ def get_client():
     """Lazily initialize OpenAI client to allow test mocking."""
     return OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def record_from_mic(duration: int = 30) -> bytes:
+def record_from_mic(duration: int = 30, max_retries: int = 3) -> bytes:
     """
-    Record audio from the microphone.
+    Record audio from the microphone with automatic retry on PortAudio errors.
 
     Automatically uses the current default input device's native sample rate
     to avoid PortAudio format mismatch errors.
+
+    On PortAudioError (which can be transient on macOS due to AUHAL state issues),
+    retries up to max_retries times with PortAudio re-initialization between
+    attempts. Only raises RuntimeError after all retries exhausted.
 
     Press Enter to stop recording (or max duration_seconds).
     Returns WAV bytes.
     """
     import numpy as np
 
-    # Freshly query the current default input device at record time
-    # (not cached) to handle device changes (e.g., headphones plugged/unplugged)
-    try:
-        default_input_idx = sd.default.device[0]
-        device_info = sd.query_devices(default_input_idx)
+    last_error = None
 
-        if device_info["max_input_channels"] == 0:
-            raise RuntimeError(
-                f"Default input device '{device_info['name']}' has no input channels. "
-                "Please check System Settings → Sound or select a different microphone."
+    for attempt in range(max_retries):
+        try:
+            # Freshly query the current default input device at record time
+            # (not cached) to handle device changes (e.g., headphones plugged/unplugged)
+            try:
+                default_input_idx = sd.default.device[0]
+                device_info = sd.query_devices(default_input_idx)
+
+                if device_info["max_input_channels"] == 0:
+                    raise RuntimeError(
+                        f"Default input device '{device_info['name']}' has no input channels. "
+                        "Please check System Settings → Sound or select a different microphone."
+                    )
+
+                # Use the device's native sample rate to prevent CoreAudio resampling issues
+                sample_rate = int(device_info["default_samplerate"])
+            except RuntimeError:
+                # Re-raise RuntimeError (device has no input channels) — don't retry
+                raise
+            except Exception as e:
+                # Device query error — this is a hard error, don't retry
+                raise RuntimeError(
+                    f"Failed to query microphone device: {e}\n"
+                    "Check: (1) System Settings → Privacy & Security → Microphone (allow this app)\n"
+                    "       (2) Run 'python check_mic.py' for detailed device diagnostics"
+                )
+
+            if attempt > 0:
+                print(f"Recording... (attempt {attempt + 1}/{max_retries}, using {sample_rate} Hz). Press Enter to stop.")
+            else:
+                print(f"Recording... (using {sample_rate} Hz). Press Enter to stop.")
+
+            audio_data = []
+
+            def audio_callback(indata, frames, time, status):
+                if status:
+                    print(f"Audio warning: {status}", file=sys.stderr)
+                audio_data.append(indata.copy())
+
+            # Record in a stream with callback
+            stream = sd.InputStream(
+                samplerate=sample_rate,
+                channels=1,
+                callback=audio_callback,
+                blocksize=1024,
+                device=default_input_idx
             )
 
-        # Use the device's native sample rate to prevent CoreAudio resampling issues
-        sample_rate = int(device_info["default_samplerate"])
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to query microphone device: {e}\n"
-            "Check: (1) System Settings → Privacy & Security → Microphone (allow this app)\n"
-            "       (2) Run 'python check_mic.py' for detailed device diagnostics"
-        )
+            with stream:
+                # Wait for user to press Enter to stop
+                input()
 
-    print(f"Recording... (using {sample_rate} Hz). Press Enter to stop.")
+            if not audio_data:
+                raise ValueError("No audio data captured. Please speak into your microphone.")
 
-    audio_data = []
+            # Concatenate all audio frames
+            audio_array = np.concatenate(audio_data, axis=0)
+            audio_array = (audio_array * 32767).astype('int16')
 
-    def audio_callback(indata, frames, time, status):
-        if status:
-            print(f"Audio warning: {status}", file=sys.stderr)
-        audio_data.append(indata.copy())
+            # Write to WAV bytes
+            wav_buffer = BytesIO()
+            wavfile.write(wav_buffer, sample_rate, audio_array)
+            wav_buffer.seek(0)
+            return wav_buffer.getvalue()
 
-    try:
-        # Record in a stream with callback
-        stream = sd.InputStream(
-            samplerate=sample_rate,
-            channels=1,
-            callback=audio_callback,
-            blocksize=1024,
-            device=default_input_idx
-        )
-
-        with stream:
-            # Wait for user to press Enter to stop
-            input()
-    except sd.PortAudioError as e:
-        raise RuntimeError(
-            f"Microphone recording failed: {e}\n"
-            "This usually means:\n"
-            "  (1) Microphone permission not granted\n"
-            "      → System Settings → Privacy & Security → Microphone\n"
-            "      → Add Terminal/iTerm/VS Code to allowed apps\n"
-            "  (2) Microphone device unavailable or disconnected\n"
-            "      → Run 'python check_mic.py' to diagnose"
-        )
-    except Exception as e:
-        raise RuntimeError(f"Microphone recording failed: {e}")
-
-    if not audio_data:
-        raise ValueError("No audio data captured. Please speak into your microphone.")
-
-    # Concatenate all audio frames
-    audio_array = np.concatenate(audio_data, axis=0)
-    audio_array = (audio_array * 32767).astype('int16')
-
-    # Write to WAV bytes
-    wav_buffer = BytesIO()
-    wavfile.write(wav_buffer, sample_rate, audio_array)
-    wav_buffer.seek(0)
-    return wav_buffer.getvalue()
+        except sd.PortAudioError as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                # Transient PortAudio error — try to recover by re-initializing PortAudio
+                print(f"\n⚠️  Audio system transient error (attempt {attempt + 1}/{max_retries}). Retrying...")
+                try:
+                    # Force PortAudio to rebuild its internal state
+                    sd._terminate()
+                    time.sleep(0.3)  # Give CoreAudio a moment to release resources
+                    sd._initialize()
+                except Exception as init_error:
+                    print(f"⚠️  Re-initialization warning: {init_error}")
+            else:
+                # All retries exhausted — raise final error
+                raise RuntimeError(
+                    f"Microphone recording failed after {max_retries} attempts: {e}\n"
+                    "This usually means:\n"
+                    "  (1) Microphone permission not granted\n"
+                    "      → System Settings → Privacy & Security → Microphone\n"
+                    "      → Add Terminal/iTerm/VS Code to allowed apps\n"
+                    "  (2) Microphone device unavailable or disconnected\n"
+                    "      → Run 'python check_mic.py' to diagnose"
+                )
+        except Exception as e:
+            # Non-PortAudio error — don't retry, raise immediately
+            raise RuntimeError(f"Microphone recording failed: {e}")
 
 def transcribe_audio(audio_bytes: bytes) -> str:
     """Transcribe audio bytes using OpenAI Whisper."""
