@@ -10,6 +10,7 @@ from app.voice_io import (
     speak_response,
     has_mic_available,
     record_from_mic,
+    generate_speech_bytes,
 )
 
 @patch("app.voice_io.sd._initialize")
@@ -196,6 +197,31 @@ def test_speak_response_long_text_truncated(mock_unlink, mock_subprocess):
         # Check that input was truncated
         call_kwargs = mock_client.audio.speech.create.call_args
         assert len(call_kwargs[1]["input"]) <= 4096
+
+def test_generate_speech_bytes_success():
+    """Test that generate_speech_bytes returns raw MP3 bytes."""
+    with patch("app.voice_io.get_client") as mock_get_client:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.content = b"mp3_data_here"
+        mock_client.audio.speech.create.return_value = mock_response
+
+        result = generate_speech_bytes("Hello world", voice="alloy")
+
+        assert result == b"mp3_data_here"
+        mock_client.audio.speech.create.assert_called_once()
+
+def test_generate_speech_bytes_empty_text():
+    """Test that empty text returns empty bytes without calling the API."""
+    with patch("app.voice_io.get_client") as mock_get_client:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        result = generate_speech_bytes("")
+
+        assert result == b""
+        mock_client.audio.speech.create.assert_not_called()
 
 def test_speak_response_empty_text():
     """Test that empty text doesn't call TTS."""

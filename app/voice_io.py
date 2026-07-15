@@ -143,22 +143,39 @@ def transcribe_audio(audio_bytes: bytes) -> str:
     except Exception as e:
         raise RuntimeError(f"Transcription failed: {e}")
 
-def speak_response(text: str, voice: str = "alloy") -> None:
-    """Speak response text using OpenAI TTS."""
+def generate_speech_bytes(text: str, voice: str = "alloy") -> bytes:
+    """
+    Generate TTS audio for the given text and return raw MP3 bytes.
+
+    Used by callers that handle playback themselves (e.g. a browser via
+    Streamlit's st.audio()). Returns empty bytes for blank/whitespace text.
+    """
     if not text or not text.strip():
+        return b""
+
+    client = get_client()
+    response = client.audio.speech.create(
+        model="tts-1",
+        voice=voice,
+        input=text[:4096]  # TTS has a 4096 char limit
+    )
+    return response.content
+
+def speak_response(text: str, voice: str = "alloy") -> None:
+    """Speak response text out loud using OpenAI TTS, played via macOS afplay."""
+    try:
+        audio_bytes = generate_speech_bytes(text, voice=voice)
+    except Exception as e:
+        print(f"⚠ Text-to-speech failed: {e}")
+        return
+
+    if not audio_bytes:
         return
 
     try:
-        client = get_client()
-        response = client.audio.speech.create(
-            model="tts-1",
-            voice=voice,
-            input=text[:4096]  # TTS has a 4096 char limit
-        )
-
         # Save to temp file and play
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-            tmp.write(response.content)
+            tmp.write(audio_bytes)
             tmp_path = tmp.name
 
         # Play using macOS afplay (available on all Macs)

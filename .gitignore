@@ -9,3 +9,4 @@ __pycache__/
 indexes/
 .DS_Store
 .venv
+.streamlit/secrets.toml
