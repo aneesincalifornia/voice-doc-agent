@@ -21,6 +21,44 @@ from app.indexer import get_or_build_index
 from app.qa_chain import query_document
 from app.voice_io import record_from_mic, transcribe_audio, speak_response, has_mic_available
 from app.web_fallback import search_web_for_answer
+from app.emailer import send_transcript_email
+
+
+def build_transcript(history: list, document_name: str) -> str:
+    """Format conversation history as plain-text transcript."""
+    lines = [f"Document: {document_name}\n"]
+    for i, (q, a) in enumerate(history, 1):
+        lines.append(f"Q{i}: {q}")
+        lines.append(f"A{i}: {a}\n")
+    return "\n".join(lines)
+
+
+def prompt_for_email_transcript(history: list, document_name: str) -> None:
+    """Prompt user to email transcript if there's conversation history."""
+    if not history:
+        return
+
+    try:
+        email_input = input("\n📧 Email yourself this conversation? (press Enter to skip): ").strip()
+
+        if not email_input:
+            return
+
+        # Basic email sanity check
+        if "@" not in email_input or "." not in email_input:
+            print("⚠ Invalid email format (needs @ and .). Skipping email.")
+            return
+
+        transcript = build_transcript(history, document_name)
+
+        try:
+            send_transcript_email(email_input, transcript, document_name)
+            print(f"✅ Transcript sent to {email_input}")
+        except RuntimeError as e:
+            print(f"⚠ Email failed: {e}")
+    except (KeyboardInterrupt, EOFError):
+        pass
+
 
 def main():
     load_dotenv()
@@ -72,6 +110,8 @@ def main():
     relevance_threshold = float(os.getenv("RELEVANCE_THRESHOLD", "0.5"))
     tts_voice = os.getenv("TTS_VOICE", "alloy")
 
+    conversation_history = []
+
     while True:
         try:
             # Get question
@@ -80,6 +120,7 @@ def main():
 
                 if cmd.lower() == "exit":
                     print("Goodbye!")
+                    prompt_for_email_transcript(conversation_history, Path(doc_path).name)
                     break
 
                 if not cmd:
@@ -96,6 +137,7 @@ def main():
 
                 if cmd.lower() == "exit":
                     print("Goodbye!")
+                    prompt_for_email_transcript(conversation_history, Path(doc_path).name)
                     break
 
                 if not cmd:
@@ -119,6 +161,9 @@ def main():
             # Display answer
             print(f"\n📝 Answer:\n{answer}")
 
+            # Track in history
+            conversation_history.append((question, answer))
+
             # Speak answer
             if voice_enabled:
                 speak_response(answer, voice=tts_voice)
@@ -141,6 +186,7 @@ def main():
 
         except KeyboardInterrupt:
             print("\n\nGoodbye!")
+            prompt_for_email_transcript(conversation_history, Path(doc_path).name)
             break
         except Exception as e:
             print(f"\n⚠ Error: {e}")

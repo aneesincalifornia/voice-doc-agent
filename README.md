@@ -1,6 +1,6 @@
 # Voice Doc Agent — Talk to Your Documents
 
-Ask questions to any document (PDF, DOCX, or TXT) using your voice. Get answers back as both text and speech. Grounded entirely in the document — no hallucinations.
+Ask questions to any document (PDF, DOCX, TXT, or Excel) using your voice. Get answers back as both text and speech. Grounded entirely in the document — no hallucinations. Email yourself the conversation transcript when you're done.
 
 ## Features
 
@@ -8,7 +8,8 @@ Ask questions to any document (PDF, DOCX, or TXT) using your voice. Get answers 
 - **Document grounding** — answers come ONLY from your document, never guesses
 - **Web fallback** — if the answer isn't found, optionally search the web (clearly labeled)
 - **Speech output** — answers are spoken back to you via TTS
-- **Multiple formats** — PDF, DOCX, or TXT
+- **Multiple formats** — PDF, DOCX, TXT, or Excel (.xlsx with multiple sheets)
+- **Email transcripts** — save your conversation history to email at the end of a session
 - **Cached indexing** — repeated questions don't re-embed (saves API cost)
 - **Robust error handling** — gracefully falls back if mic is unavailable
 
@@ -72,22 +73,39 @@ in agreement with their manager.
 
 ## Configuration
 
-Edit `.env` to customize:
+Edit `.env` to customize. Copy from `.env.example` for a template:
 
 ```env
+# OpenAI API (required)
 OPENAI_API_KEY=sk-your-key-here
 CHAT_MODEL=gpt-4o-mini              # LLM for Q&A
 EMBED_MODEL=text-embedding-3-small  # Embedding model
+
+# Voice settings (optional)
 TTS_VOICE=alloy                     # Speech output voice (alloy, echo, fable, onyx, nova, shimmer)
 RELEVANCE_THRESHOLD=0.5             # Similarity threshold for "not found" (0-1)
+
+# Email settings (optional - only needed to email transcripts)
+# For Gmail: use an app password, not your regular password
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your-email@gmail.com
+SMTP_PASSWORD=your-app-password-here
 ```
+
+**To generate a Gmail app password:**
+1. Enable 2-factor authentication on your Google account
+2. Go to https://myaccount.google.com/apppasswords
+3. Select "Mail" and "Windows Computer" (or your device)
+4. Copy the generated 16-character password
+5. Paste it into `SMTP_PASSWORD` in `.env`
 
 ## Architecture
 
 ```
-Document
+Document (PDF/DOCX/TXT/Excel)
    ↓
-Loader (PDF/DOCX/TXT)
+Loader (format-specific extraction)
    ↓
 Chunker (RecursiveCharacterTextSplitter)
    ↓
@@ -102,6 +120,8 @@ If relevant: Grounded LLM (only uses retrieved context)
 Answer + TTS + on-screen text
    ↓
 If not found: Optional web fallback (clearly labeled)
+   ↓
+On exit: Optional email transcript (SMTP)
 ```
 
 ## Testing
@@ -118,13 +138,16 @@ pytest --cov=app tests/
 ```
 
 Test suite includes:
-- `test_loaders.py` — PDF/DOCX/TXT loading, error handling
+- `test_loaders.py` — PDF/DOCX/TXT/Excel loading, error handling
 - `test_chunker.py` — text splitting with overlap
 - `test_indexer.py` — index caching, build/load roundtrips
 - `test_qa_chain.py` — document grounding, threshold logic
 - `test_voice_io.py` — transcription, speech output, mic detection
+- `test_emailer.py` — SMTP email sending, credential validation
 - `test_web_fallback.py` — web search with labeling
 - `test_integration.py` — end-to-end pipeline
+
+Total: 58 tests, all mocked (no API cost)
 
 ## Robustness Notes
 
