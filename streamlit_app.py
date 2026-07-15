@@ -163,10 +163,12 @@ def render_chat_history():
             if audio_key not in st.session_state:
                 try:
                     st.session_state[audio_key] = generate_speech_bytes(turn["answer"], voice=tts_voice)
-                except Exception:
+                except Exception as e:
+                    print(f"TTS failed: {e}", file=__import__('sys').stderr)
                     st.session_state[audio_key] = b""
+                    st.caption("🔇 Audio unavailable")
             if st.session_state[audio_key]:
-                st.audio(st.session_state[audio_key], format="audio/mp3")
+                st.audio(st.session_state[audio_key], format="audio/mp3", autoplay=True)
 
             # Web fallback offer (only on the most recent not-found turn)
             if not turn["found"] and i == len(st.session_state.chat_history) - 1:
@@ -177,9 +179,10 @@ def render_chat_history():
                     try:
                         web_audio = generate_speech_bytes(web_answer, voice=tts_voice)
                         if web_audio:
-                            st.audio(web_audio, format="audio/mp3")
-                    except Exception:
-                        pass
+                            st.audio(web_audio, format="audio/mp3", autoplay=True)
+                    except Exception as e:
+                        print(f"Web fallback TTS failed: {e}", file=__import__('sys').stderr)
+                        st.caption("🔇 Audio unavailable for web result")
 
 
 def main():
